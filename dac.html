@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Conversor Audio a DAC 8 bits (Estéreo + BIN + PROGMEM)</title>
+<style>
+  body { font-family: Arial; padding: 20px; background: #eaeaea; }
+  .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 0 10px #aaa; }
+  textarea { width: 100%; height: 220px; font-family: monospace; }
+  select, button { padding: 10px; margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h2>🎧 Conversor: Audio → DAC 8 bits (Estéreo + BIN + PROGMEM)</h2>
+
+  <p><b>1. Cargar audio:</b></p>
+  <input type="file" id="audioFile" accept="audio/*">
+
+  <p><b>2. Frecuencia (resample):</b></p>
+  <select id="sampleRate">
+    <option value="8000">8000 Hz</option>
+    <option value="16000">16000 Hz</option>
+    <option value="22050">22050 Hz</option>
+    <option value="44100">44100 Hz</option>
+  </select>
+
+  <p><b>3. Modo:</b></p>
+  <select id="mode">
+    <option value="stereo">Estéreo (L,R)</option>
+    <option value="mono">Mono</option>
+  </select>
+
+  <br><br>
+  <button id="convertBtn">Convertir</button>
+  <button id="downloadBin">Descargar .BIN</button>
+
+  <p><b>4. PROGMEM / array C:</b></p>
+  <textarea id="output"></textarea>
+</div>
+
+<script>
+let finalBuffer = null;
+
+document.getElementById("convertBtn").onclick = async () => {
+  const file = document.getElementById("audioFile").files[0];
+  const rate = parseInt(document.getElementById("sampleRate").value);
+  const mode = document.getElementById("mode").value;
+  const out = document.getElementById("output");
+
+  if (!file) {
+    out.value = "Carga un archivo primero.";
+    return;
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const audioCtx = new AudioContext();
+  const audioData = await audioCtx.decodeAudioData(arrayBuffer);
+
+  const originalRate = audioData.sampleRate;
+  const ratio = originalRate / rate;
+  const length = Math.floor(audioData.length / ratio);
+
+  const left = audioData.getChannelData(0);
+  const right = audioData.numberOfChannels > 1 ? audioData.getChannelData(1) : left;
+
+  const resL = new Float32Array(length);
+  const resR = new Float32Array(length);
+
+  for (let i = 0; i < length; i++) {
+    const idx = Math.floor(i * ratio);
+    resL[i] = left[idx];
+    resR[i] = right[idx];
+  }
+
+  let data;
+  if (mode === "mono") {
+    data = new Uint8Array(length);
+    for (let i = 0; i < length; i++) {
+      const mix = (resL[i] + resR[i]) * 0.5;
+      data[i] = Math.min(255, Math.max(0, Math.floor((mix + 1) * 127.5)));
+    }
+  } else {
+    data = new Uint8Array(length * 2);
+    for (let i = 0; i < length; i++) {
+      const L = Math.min(255, Math.max(0, Math.floor((resL[i] + 1) * 127.5)));
+      const R = Math.min(255, Math.max(0, Math.floor((resR[i] + 1) * 127.5)));
+      data[i * 2] = L;
+      data[i * 2 + 1] = R;
+    }
+  }
+
+  finalBuffer = data;
+
+  let text =
+`#include <Arduino.h>
+
+const uint32_t audioSampleRate = ${rate};
+const uint32_t audioLength = ${data.length};
+
+const uint8_t audioData[] PROGMEM = {
+`;
+
+  for (let i = 0; i < data.length; i++) {
+    text += data[i];
+    if (i < data.length - 1) text += ", ";
+    if ((i + 1) % 25 === 0) text += "\n";
+  }
+
+  text += "\n};\n";
+
+  out.value = text;
+};
+
+document.getElementById("downloadBin").onclick = () => {
+  if (!finalBuffer) return;
+
+  const blob = new Blob([finalBuffer], { type: "application/octet-stream" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "audio_dac8.bin";
+  a.click();
+};
+</script>
+
+</body>
+</html>
